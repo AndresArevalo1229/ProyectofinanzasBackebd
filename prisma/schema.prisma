@@ -1,0 +1,371 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum WorkspaceRole {
+  OWNER
+  MEMBER
+}
+
+enum AccountType {
+  CASH
+  BANK
+  CARD
+  OTHER
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum GoalStatus {
+  ACTIVE
+  COMPLETED
+  CANCELED
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+enum AuthEventType {
+  REGISTER
+  LOGIN
+  LOGIN_FAILED
+  REFRESH
+  LOGOUT
+  PASSWORD_FORGOT
+  PASSWORD_RESET
+}
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  passwordHash      String
+  displayName       String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  deletedAt         DateTime?
+
+  ownedWorkspaces       Workspace[]         @relation("WorkspaceOwner")
+  workspaceMemberships  WorkspaceMember[]
+  refreshSessions       RefreshSession[]
+  passwordResetTokens   PasswordResetToken[]
+  authAuditLogs         AuthAuditLog[]
+  createdTransactions   Transaction[]       @relation("TransactionCreator")
+  createdTransfers      AccountTransfer[]   @relation("TransferCreator")
+  createdInvites        WorkspaceInvite[]   @relation("InviteCreator")
+  acceptedInvites       WorkspaceInvite[]   @relation("InviteAcceptedBy")
+  goalContributions     GoalContribution[]  @relation("GoalContributionCreator")
+  createdGoals          Goal[]              @relation("GoalCreator")
+  createdAccounts       Account[]           @relation("AccountCreator")
+  createdCategories     Category[]          @relation("CategoryCreator")
+  createdBudgets        Budget[]            @relation("BudgetCreator")
+
+  @@index([deletedAt])
+}
+
+model Workspace {
+  id              String   @id @default(cuid())
+  name            String
+  baseCurrency    String   @db.Char(3)
+  timezone        String
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  createdByUser   User              @relation("WorkspaceOwner", fields: [createdByUserId], references: [id])
+  memberships     WorkspaceMember[]
+  invites         WorkspaceInvite[]
+  accounts        Account[]
+  categories      Category[]
+  transactions    Transaction[]
+  transactionTags TransactionTag[]
+  budgets         Budget[]
+  goals           Goal[]
+  goalContributions GoalContribution[]
+  transfers       AccountTransfer[]
+  authAuditLogs   AuthAuditLog[]
+
+  @@index([createdByUserId])
+  @@index([deletedAt])
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole
+  joinedAt    DateTime      @default(now())
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deletedAt   DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId, deletedAt])
+  @@index([userId, deletedAt])
+}
+
+model WorkspaceInvite {
+  id               String       @id @default(cuid())
+  workspaceId      String
+  code             String       @unique
+  status           InviteStatus @default(PENDING)
+  expiresAt        DateTime
+  createdByUserId  String
+  acceptedByUserId String?
+  acceptedAt       DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  deletedAt        DateTime?
+
+  workspace      Workspace @relation(fields: [workspaceId], references: [id])
+  createdByUser  User      @relation("InviteCreator", fields: [createdByUserId], references: [id])
+  acceptedByUser User?     @relation("InviteAcceptedBy", fields: [acceptedByUserId], references: [id])
+
+  @@index([workspaceId, status, expiresAt])
+  @@index([deletedAt])
+}
+
+model RefreshSession {
+  id                String    @id @default(cuid())
+  userId            String
+  tokenHash         String    @unique
+  userAgent         String?
+  ipAddress         String?
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  revokedReason     String?
+  previousSessionId String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id          String    @id @default(cuid())
+  userId      String
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, usedAt, expiresAt])
+}
+
+model AuthAuditLog {
+  id          String        @id @default(cuid())
+  userId      String?
+  workspaceId String?
+  eventType   AuthEventType
+  ipAddress   String?
+  userAgent   String?
+  metadata    Json?
+  createdAt   DateTime      @default(now())
+
+  user      User?      @relation(fields: [userId], references: [id])
+  workspace Workspace? @relation(fields: [workspaceId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([eventType, createdAt])
+}
+
+model Account {
+  id              String      @id @default(cuid())
+  workspaceId     String
+  createdByUserId String?
+  name            String
+  type            AccountType
+  initialBalance  Int         @default(0)
+  isArchived      Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  deletedAt       DateTime?
+
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id])
+  createdByUser User?            @relation("AccountCreator", fields: [createdByUserId], references: [id])
+  transactions  Transaction[]
+  transfersOut  AccountTransfer[] @relation("TransferFromAccount")
+  transfersIn   AccountTransfer[] @relation("TransferToAccount")
+
+  @@index([workspaceId, deletedAt])
+  @@index([workspaceId, isArchived])
+}
+
+model Category {
+  id              String          @id @default(cuid())
+  workspaceId     String
+  createdByUserId String?
+  name            String
+  type            TransactionType
+  color           String?
+  icon            String?
+  isSystem        Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  deletedAt       DateTime?
+
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id])
+  createdByUser User?         @relation("CategoryCreator", fields: [createdByUserId], references: [id])
+  transactions  Transaction[]
+  budgets       Budget[]
+
+  @@unique([workspaceId, name, type])
+  @@index([workspaceId, deletedAt])
+}
+
+model Budget {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  categoryId      String
+  createdByUserId String
+  yearMonth       String   @db.Char(7)
+  limitAmount     Int
+  notes           String?  @db.Text
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  workspace     Workspace @relation(fields: [workspaceId], references: [id])
+  category      Category  @relation(fields: [categoryId], references: [id])
+  createdByUser User      @relation("BudgetCreator", fields: [createdByUserId], references: [id])
+
+  @@unique([workspaceId, categoryId, yearMonth])
+  @@index([workspaceId, yearMonth, deletedAt])
+  @@index([categoryId, yearMonth, deletedAt])
+}
+
+model TransactionTag {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id])
+  transactions  Transaction[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, deletedAt])
+}
+
+model Transaction {
+  id              String          @id @default(cuid())
+  workspaceId     String
+  accountId       String
+  categoryId      String?
+  createdByUserId String
+  type            TransactionType
+  amount          Int
+  description     String?
+  notes           String?         @db.Text
+  occurredAt      DateTime
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  deletedAt       DateTime?
+
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id])
+  account           Account            @relation(fields: [accountId], references: [id])
+  category          Category?          @relation(fields: [categoryId], references: [id])
+  createdByUser     User               @relation("TransactionCreator", fields: [createdByUserId], references: [id])
+  tags              TransactionTag[]
+  goalContributions GoalContribution[]
+
+  @@index([workspaceId, occurredAt])
+  @@index([workspaceId, type, occurredAt])
+  @@index([accountId, occurredAt])
+  @@index([createdByUserId, occurredAt])
+  @@index([deletedAt])
+}
+
+model AccountTransfer {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  fromAccountId   String
+  toAccountId     String
+  amount          Int
+  description     String?
+  transferredAt   DateTime
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  workspace      Workspace @relation(fields: [workspaceId], references: [id])
+  fromAccount    Account   @relation("TransferFromAccount", fields: [fromAccountId], references: [id])
+  toAccount      Account   @relation("TransferToAccount", fields: [toAccountId], references: [id])
+  createdByUser  User      @relation("TransferCreator", fields: [createdByUserId], references: [id])
+
+  @@index([workspaceId, transferredAt])
+  @@index([fromAccountId, transferredAt])
+  @@index([toAccountId, transferredAt])
+  @@index([deletedAt])
+}
+
+model Goal {
+  id              String     @id @default(cuid())
+  workspaceId     String
+  createdByUserId String
+  name            String
+  targetAmount    Int
+  targetDate      DateTime?
+  isRecurring     Boolean    @default(false)
+  recurrenceRule  Json?
+  status          GoalStatus @default(ACTIVE)
+  notes           String?    @db.Text
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  workspace       Workspace         @relation(fields: [workspaceId], references: [id])
+  createdByUser   User              @relation("GoalCreator", fields: [createdByUserId], references: [id])
+  contributions   GoalContribution[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, deletedAt])
+}
+
+model GoalContribution {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  goalId          String
+  createdByUserId String
+  transactionId   String?
+  amount          Int
+  contributedAt   DateTime
+  notes           String?  @db.Text
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  workspace      Workspace    @relation(fields: [workspaceId], references: [id])
+  goal           Goal         @relation(fields: [goalId], references: [id])
+  createdByUser  User         @relation("GoalContributionCreator", fields: [createdByUserId], references: [id])
+  transaction    Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@index([workspaceId, contributedAt])
+  @@index([goalId, contributedAt])
+  @@index([transactionId])
+  @@index([deletedAt])
+}
