@@ -1,10 +1,4 @@
-import type {
-  Account,
-  AccountType,
-  Prisma,
-  PrismaClient,
-  TransactionType,
-} from '@prisma/client'
+import { Prisma, type Account, type AccountType, type PrismaClient, type TransactionType } from '@prisma/client'
 
 import {
   calculateBudgetProgress,
@@ -115,8 +109,21 @@ interface TransactionMutationResult<TTransaction> {
 
 const assertPositiveAmount = (value: number, fieldName: string): void => {
   if (!Number.isInteger(value) || value <= 0) {
-    throw new HttpError(400, 'MONTO_INVALIDO', `${fieldName} debe ser entero positivo`) 
+    throw new HttpError(400, 'MONTO_INVALIDO', `${fieldName} debe ser entero positivo`)
   }
+}
+
+const isUniqueConstraintError = (error: unknown): boolean => {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+    return true
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    const candidate = error as Record<string, unknown>
+    return candidate.code === 'P2002'
+  }
+
+  return false
 }
 
 const parseDate = (raw: string, fieldName: string): Date => {
@@ -400,18 +407,30 @@ export class FinanceService {
     userId: string,
     input: CreateCategoryInput,
   ) {
-    const category = await this.prisma.category.create({
-      data: {
-        workspaceId: scope.workspaceId,
-        createdByUserId: userId,
-        name: input.name.trim(),
-        type: input.type,
-        color: input.color,
-        icon: input.icon,
-      },
-    })
+    try {
+      const category = await this.prisma.category.create({
+        data: {
+          workspaceId: scope.workspaceId,
+          createdByUserId: userId,
+          name: input.name.trim(),
+          type: input.type,
+          color: input.color,
+          icon: input.icon,
+        },
+      })
 
-    return category
+      return category
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new HttpError(
+          409,
+          'CATEGORIA_DUPLICADA',
+          'Ya existe una categoría con el mismo nombre y tipo en este workspace',
+        )
+      }
+
+      throw error
+    }
   }
 
   async listCategories(scope: WorkspaceScope) {
@@ -445,17 +464,29 @@ export class FinanceService {
       throw new HttpError(400, 'CATEGORIA_SISTEMA', 'No se pueden editar categorías de sistema')
     }
 
-    return this.prisma.category.update({
-      where: {
-        id: categoryId,
-      },
-      data: {
-        name: input.name?.trim(),
-        type: input.type,
-        color: input.color,
-        icon: input.icon,
-      },
-    })
+    try {
+      return await this.prisma.category.update({
+        where: {
+          id: categoryId,
+        },
+        data: {
+          name: input.name?.trim(),
+          type: input.type,
+          color: input.color,
+          icon: input.icon,
+        },
+      })
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new HttpError(
+          409,
+          'CATEGORIA_DUPLICADA',
+          'Ya existe una categoría con el mismo nombre y tipo en este workspace',
+        )
+      }
+
+      throw error
+    }
   }
 
   async deleteCategory(scope: WorkspaceScope, categoryId: string): Promise<void> {

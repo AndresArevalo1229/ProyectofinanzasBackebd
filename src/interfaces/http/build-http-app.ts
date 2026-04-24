@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 
 import { AuthService } from '../../application/auth/auth.service.js'
 import { BudgetService } from '../../application/budgets/budget.service.js'
+import { ExpansionService } from '../../application/expansion/expansion.service.js'
 import { FinanceService } from '../../application/finance/finance.service.js'
 import { GoalService } from '../../application/goals/goal.service.js'
 import { ReportService } from '../../application/reports/report.service.js'
@@ -27,6 +28,7 @@ import { registerGoalsRoutes } from './routes/goals.routes.js'
 import { registerHealthRoutes } from './routes/health.routes.js'
 import { registerReportsRoutes } from './routes/reports.routes.js'
 import { registerWorkspacesRoutes } from './routes/workspaces.routes.js'
+import { registerExpansionRoutes } from './routes/expansion.routes.js'
 
 interface BuildHttpAppDependencies {
   config: AppConfig
@@ -73,6 +75,7 @@ export const buildHttpApp = async (
         { name: 'Budgets', description: 'Presupuestos por categoría y mes' },
         { name: 'Goals', description: 'Metas y aportaciones' },
         { name: 'Reports', description: 'Dashboard y reportes' },
+        { name: 'Expansion', description: 'Módulos en expansión (fase 5)' },
       ],
     },
   })
@@ -107,6 +110,7 @@ export const buildHttpApp = async (
   const budgetService = new BudgetService(dependencies.prisma)
   const goalService = new GoalService(dependencies.prisma)
   const reportService = new ReportService(dependencies.prisma)
+  const expansionService = new ExpansionService(dependencies.prisma)
 
   const requireAuthHandler = requireAuth({
     prisma: dependencies.prisma,
@@ -162,6 +166,7 @@ export const buildHttpApp = async (
         workspaceService,
         prisma: dependencies.prisma,
         requireAuth: requireAuthHandler,
+        requireWorkspace: requireWorkspaceHandler,
       })
 
       registerFinanceRoutes(v1, {
@@ -185,6 +190,12 @@ export const buildHttpApp = async (
 
       registerReportsRoutes(v1, {
         reportService,
+        requireAuth: requireAuthHandler,
+        requireWorkspace: requireWorkspaceHandler,
+      })
+
+      registerExpansionRoutes(v1, {
+        expansionService,
         requireAuth: requireAuthHandler,
         requireWorkspace: requireWorkspaceHandler,
       })

@@ -30,6 +30,7 @@ const baseConfig: AppConfig = {
     accessTokenTtl: '15m',
     refreshTokenTtlDays: 30,
     passwordResetTtlMinutes: 30,
+    exposePasswordResetToken: true,
   },
   workspace: {
     inviteTtlDays: 7,

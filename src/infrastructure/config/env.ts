@@ -2,7 +2,11 @@ import { config as loadDotEnv } from 'dotenv'
 import { z } from 'zod'
 
 import { buildDatabaseUrl } from './build-database-url.js'
-import { parseCorsOrigins, parseEncuestaExcludedClientIds } from './parsers.js'
+import {
+  parseBooleanFlag,
+  parseCorsOrigins,
+  parseEncuestaExcludedClientIds,
+} from './parsers.js'
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -22,6 +26,7 @@ const envSchema = z.object({
   JWT_ACCESS_TTL: z.string().default('15m'),
   JWT_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
   PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().positive().default(30),
+  AUTH_EXPOSE_PASSWORD_RESET_TOKEN: z.string().optional(),
   WORKSPACE_INVITE_TTL_DAYS: z.coerce.number().int().positive().default(7),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
   RATE_LIMIT_WINDOW: z.string().default('1 minute'),
@@ -47,6 +52,7 @@ export interface AppConfig {
     accessTokenTtl: string
     refreshTokenTtlDays: number
     passwordResetTtlMinutes: number
+    exposePasswordResetToken: boolean
   }
   workspace: {
     inviteTtlDays: number
@@ -84,6 +90,11 @@ export const parseEnvironment = (rawEnv: NodeJS.ProcessEnv): AppConfig => {
       accessTokenTtl: parsed.JWT_ACCESS_TTL,
       refreshTokenTtlDays: parsed.JWT_REFRESH_TTL_DAYS,
       passwordResetTtlMinutes: parsed.PASSWORD_RESET_TTL_MINUTES,
+      exposePasswordResetToken: parseBooleanFlag(
+        parsed.AUTH_EXPOSE_PASSWORD_RESET_TOKEN,
+        parsed.NODE_ENV !== 'production',
+        'AUTH_EXPOSE_PASSWORD_RESET_TOKEN',
+      ),
     },
     workspace: {
       inviteTtlDays: parsed.WORKSPACE_INVITE_TTL_DAYS,

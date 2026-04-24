@@ -34,6 +34,7 @@ describe('parseEnvironment', () => {
     expect(config.auth.accessTokenTtl).toBe('20m')
     expect(config.auth.refreshTokenTtlDays).toBe(45)
     expect(config.auth.passwordResetTtlMinutes).toBe(60)
+    expect(config.auth.exposePasswordResetToken).toBe(true)
     expect(config.workspace.inviteTtlDays).toBe(10)
     expect(config.security.rateLimitMax).toBe(10)
     expect(config.security.rateLimitWindow).toBe('2 minutes')
@@ -58,9 +59,29 @@ describe('parseEnvironment', () => {
     expect(config.auth.accessTokenTtl).toBe('15m')
     expect(config.auth.refreshTokenTtlDays).toBe(30)
     expect(config.auth.passwordResetTtlMinutes).toBe(30)
+    expect(config.auth.exposePasswordResetToken).toBe(true)
     expect(config.workspace.inviteTtlDays).toBe(7)
     expect(config.security.rateLimitMax).toBe(5)
     expect(config.security.rateLimitWindow).toBe('1 minute')
+  })
+
+  it('desactiva exposición de token en producción por defecto', () => {
+    const config = parseEnvironment({
+      ...baseEnv,
+      NODE_ENV: 'production',
+    })
+
+    expect(config.auth.exposePasswordResetToken).toBe(false)
+  })
+
+  it('permite sobreescribir exposición con variable explícita', () => {
+    const config = parseEnvironment({
+      ...baseEnv,
+      NODE_ENV: 'production',
+      AUTH_EXPOSE_PASSWORD_RESET_TOKEN: 'true',
+    })
+
+    expect(config.auth.exposePasswordResetToken).toBe(true)
   })
 
   it('falla cuando faltan variables obligatorias', () => {

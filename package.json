@@ -13,9 +13,11 @@
     "start": "node dist/main.js",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:db": "RUN_DB_INTEGRATION=1 vitest run tests/integration/http/v1.mysql.integration.test.ts",
+    "test:db": "RUN_DB_INTEGRATION=1 vitest run --hookTimeout=60000 tests/integration/http/v1.mysql.integration.test.ts",
     "test:watch": "vitest",
     "seed:default": "tsx scripts/seed-default-admin.ts",
+    "seed:reset-admin": "tsx scripts/seed-default-admin.ts --reset --confirm YES_RESET_ADMIN",
+    "cleanup:production-data": "tsx scripts/cleanup-production-data.ts",
     "prisma:generate": "node scripts/run-prisma.mjs generate",
     "prisma:migrate:dev": "node scripts/run-prisma.mjs migrate dev",
     "prisma:migrate:deploy": "node scripts/run-prisma.mjs migrate deploy"

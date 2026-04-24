@@ -36,6 +36,18 @@ enum InviteStatus {
   EXPIRED
 }
 
+enum ShoppingPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ShoppingItemStatus {
+  PENDING
+  BOUGHT
+  CANCELED
+}
+
 enum AuthEventType {
   REGISTER
   LOGIN
@@ -69,6 +81,9 @@ model User {
   createdAccounts       Account[]           @relation("AccountCreator")
   createdCategories     Category[]          @relation("CategoryCreator")
   createdBudgets        Budget[]            @relation("BudgetCreator")
+  createdTickets        Ticket[]            @relation("TicketCreator")
+  createdShoppingItems  ShoppingItem[]      @relation("ShoppingItemCreator")
+  createdInventoryItems InventoryItem[]     @relation("InventoryItemCreator")
 
   @@index([deletedAt])
 }
@@ -95,6 +110,9 @@ model Workspace {
   goalContributions GoalContribution[]
   transfers       AccountTransfer[]
   authAuditLogs   AuthAuditLog[]
+  tickets         Ticket[]
+  shoppingItems   ShoppingItem[]
+  inventoryItems  InventoryItem[]
 
   @@index([createdByUserId])
   @@index([deletedAt])
@@ -291,6 +309,8 @@ model Transaction {
   createdByUser     User               @relation("TransactionCreator", fields: [createdByUserId], references: [id])
   tags              TransactionTag[]
   goalContributions GoalContribution[]
+  linkedTickets     Ticket[]           @relation("TicketLinkedTransaction")
+  linkedShoppingItems ShoppingItem[]   @relation("ShoppingItemLinkedTransaction")
 
   @@index([workspaceId, occurredAt])
   @@index([workspaceId, type, occurredAt])
@@ -368,4 +388,76 @@ model GoalContribution {
   @@index([goalId, contributedAt])
   @@index([transactionId])
   @@index([deletedAt])
+}
+
+model Ticket {
+  id                  String    @id @default(cuid())
+  workspaceId         String
+  createdByUserId     String
+  linkedTransactionId String?
+  title               String
+  amount              Int
+  merchant            String?
+  category            String?
+  currency            String?   @db.Char(3)
+  purchasedAt         DateTime
+  notes               String?   @db.Text
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
+
+  workspace          Workspace     @relation(fields: [workspaceId], references: [id])
+  createdByUser      User          @relation("TicketCreator", fields: [createdByUserId], references: [id])
+  linkedTransaction  Transaction?  @relation("TicketLinkedTransaction", fields: [linkedTransactionId], references: [id])
+
+  @@index([workspaceId, purchasedAt])
+  @@index([workspaceId, deletedAt])
+  @@index([linkedTransactionId])
+}
+
+model ShoppingItem {
+  id                  String             @id @default(cuid())
+  workspaceId         String
+  createdByUserId     String
+  linkedTransactionId String?
+  name                String
+  quantity            Int
+  unit                String?
+  estimatedAmount     Int?
+  priority            ShoppingPriority   @default(MEDIUM)
+  status              ShoppingItemStatus @default(PENDING)
+  notes               String?            @db.Text
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  deletedAt           DateTime?
+
+  workspace          Workspace     @relation(fields: [workspaceId], references: [id])
+  createdByUser      User          @relation("ShoppingItemCreator", fields: [createdByUserId], references: [id])
+  linkedTransaction  Transaction?  @relation("ShoppingItemLinkedTransaction", fields: [linkedTransactionId], references: [id])
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, deletedAt])
+  @@index([linkedTransactionId])
+}
+
+model InventoryItem {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  createdByUserId String
+  name            String
+  stock           Int
+  minStock        Int
+  unit            String?
+  location        String?
+  reorderQty      Int?
+  notes           String?  @db.Text
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  deletedAt       DateTime?
+
+  workspace      Workspace @relation(fields: [workspaceId], references: [id])
+  createdByUser  User      @relation("InventoryItemCreator", fields: [createdByUserId], references: [id])
+
+  @@index([workspaceId, stock, minStock])
+  @@index([workspaceId, deletedAt])
 }

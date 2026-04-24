@@ -1,3 +1,4 @@
+import { config as loadDotEnv } from 'dotenv'
 import pino from 'pino'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
@@ -10,6 +11,8 @@ import type {
   RespuestaExitosa,
 } from '../../../src/interfaces/http/contracts/respuesta-http.js'
 import { buildHttpApp } from '../../../src/interfaces/http/build-http-app.js'
+
+loadDotEnv()
 
 const runDbIntegration = process.env.RUN_DB_INTEGRATION === '1'
 const describeDb = runDbIntegration ? describe : describe.skip
@@ -59,8 +62,8 @@ describeDb('HTTP v1 con MySQL real', () => {
     JWT_REFRESH_TTL_DAYS: process.env.JWT_REFRESH_TTL_DAYS ?? '30',
     PASSWORD_RESET_TTL_MINUTES: process.env.PASSWORD_RESET_TTL_MINUTES ?? '30',
     WORKSPACE_INVITE_TTL_DAYS: process.env.WORKSPACE_INVITE_TTL_DAYS ?? '7',
-    RATE_LIMIT_MAX: process.env.RATE_LIMIT_MAX ?? '40',
-    RATE_LIMIT_WINDOW: process.env.RATE_LIMIT_WINDOW ?? '1 minute',
+    RATE_LIMIT_MAX: '1000',
+    RATE_LIMIT_WINDOW: '1 minute',
   })
 
   const prisma = createPrismaClient(config)
@@ -130,12 +133,14 @@ describeDb('HTTP v1 con MySQL real', () => {
       prisma,
       obtenerEstadoSaludUseCase,
     })
-  })
+  }, 60_000)
 
   afterAll(async () => {
-    await app.close()
+    if (app) {
+      await app.close()
+    }
     await prisma.$disconnect()
-  })
+  }, 60_000)
 
   it('completa auth: register/login/refresh/logout con rotación de refresh token', async () => {
     const email = uniqueEmail('auth')
@@ -260,6 +265,248 @@ describeDb('HTTP v1 con MySQL real', () => {
     expect(membersPayload.exito).toBe(true)
     expect(membersPayload.datos.some((item) => item.email === owner.user.email)).toBe(true)
     expect(membersPayload.datos.some((item) => item.email === member.user.email)).toBe(true)
+  })
+
+  it('lista y revoca invitaciones con validaciones de permisos y estado', async () => {
+    const owner = await register({
+      email: uniqueEmail('owner-invites-adv'),
+      password: 'SecurePass123!',
+      displayName: 'Owner Invites Adv',
+      workspaceName: 'Workspace Invitaciones Avanzadas',
+    })
+    const member = await register({
+      email: uniqueEmail('member-invites-adv'),
+      password: 'SecurePass123!',
+      displayName: 'Member Invites Adv',
+      workspaceName: 'Workspace Personal Invitaciones',
+    })
+    const outsider = await register({
+      email: uniqueEmail('outsider-invites-adv'),
+      password: 'SecurePass123!',
+      displayName: 'Outsider Invites Adv',
+      workspaceName: 'Workspace Outsider Invitaciones',
+    })
+
+    const workspaceId = owner.workspaces[0]?.id
+    expect(workspaceId).toBeDefined()
+
+    const invitePendingResponse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/invites`,
+      headers: {
+        authorization: `Bearer ${owner.tokens.accessToken}`,
+      },
+    })
+    expect(invitePendingResponse.statusCode).toBe(201)
+    const invitePendingPayload = invitePendingResponse.json<
+      RespuestaExitosa<{ code: string; workspaceId: string }>
+    >()
+
+    const inviteForMemberResponse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/invites`,
+      headers: {
+        authorization: `Bearer ${owner.tokens.accessToken}`,
+      },
+    })
+    expect(inviteForMemberResponse.statusCode).toBe(201)
+    const inviteForMemberCode = inviteForMemberResponse.json<
+      RespuestaExitosa<{ code: string }>
+    >().datos.code
+
+    const joinResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/workspaces/join',
+      headers: {
+        authorization: `Bearer ${member.tokens.accessToken}`,
+      },
+      payload: {
+        code: inviteForMemberCode,
+      },
+    })
+    expect(joinResponse.statusCode).toBe(200)
+
+    const ownerListResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/workspaces/${workspaceId}/invites`,
+      headers: {
+        authorization: `Bearer ${owner.tokens.accessToken}`,
+      },
+    })
+    expect(ownerListResponse.statusCode).toBe(200)
+    const ownerListPayload = ownerListResponse.json<
+      RespuestaExitosa<
+        Array<{
+          id: string
+          code: string
+          status: 'PENDING' | 'ACCEPTED' | 'REVOKED' | 'EXPIRED'
+        }>
+      >
+    >()
+    expect(ownerListPayload.exito).toBe(true)
+    expect(ownerListPayload.datos.length).toBeGreaterThanOrEqual(2)
+
+    const pendingInvite = ownerListPayload.datos.find(
+      (item) => item.code === invitePendingPayload.datos.code,
+    )
+    expect(pendingInvite).toBeDefined()
+    expect(pendingInvite?.status).toBe('PENDING')
+    const pendingInviteId = pendingInvite?.id
+    expect(pendingInviteId).toBeDefined()
+
+    const memberListResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/workspaces/${workspaceId}/invites`,
+      headers: {
+        authorization: `Bearer ${member.tokens.accessToken}`,
+      },
+    })
+    expect(memberListResponse.statusCode).toBe(403)
+    const memberListPayload = memberListResponse.json<RespuestaError>()
+    expect(memberListPayload.error.codigo).toBe('PERMISO_DENEGADO')
+
+    const outsiderListResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/workspaces/${workspaceId}/invites`,
+      headers: {
+        authorization: `Bearer ${outsider.tokens.accessToken}`,
+      },
+    })
+    expect(outsiderListResponse.statusCode).toBe(403)
+    const outsiderListPayload = outsiderListResponse.json<RespuestaError>()
+    expect(outsiderListPayload.error.codigo).toBe('WORKSPACE_SIN_ACCESO')
+
+    const revokePendingResponse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/invites/${pendingInviteId ?? ''}/revoke`,
+      headers: {
+        authorization: `Bearer ${owner.tokens.accessToken}`,
+      },
+    })
+    expect(revokePendingResponse.statusCode).toBe(200)
+    const revokePendingPayload = revokePendingResponse.json<
+      RespuestaExitosa<{ id: string; status: 'REVOKED' }>
+    >()
+    expect(revokePendingPayload.exito).toBe(true)
+    expect(revokePendingPayload.datos.status).toBe('REVOKED')
+
+    const ownerListAfterRevokeResponse = await app.inject({
+      method: 'GET',
+      url: `/api/v1/workspaces/${workspaceId}/invites`,
+      headers: {
+        authorization: `Bearer ${owner.tokens.accessToken}`,
+      },
+    })
+    expect(ownerListAfterRevokeResponse.statusCode).toBe(200)
+    const ownerListAfterRevokePayload = ownerListAfterRevokeResponse.json<
+      RespuestaExitosa<
+        Array<{
+          id: string
+          status: 'PENDING' | 'ACCEPTED' | 'REVOKED' | 'EXPIRED'
+        }>
+      >
+    >()
+    const revokedInvite = ownerListAfterRevokePayload.datos.find(
+      (item) => item.id === pendingInviteId,
+    )
+    expect(revokedInvite?.status).toBe('REVOKED')
+
+    const acceptedInvite = ownerListAfterRevokePayload.datos.find((item) => item.status === 'ACCEPTED')
+    expect(acceptedInvite).toBeDefined()
+    const acceptedInviteId = acceptedInvite?.id
+    expect(acceptedInviteId).toBeDefined()
+
+    const revokeAcceptedResponse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/invites/${acceptedInviteId ?? ''}/revoke`,
+      headers: {
+        authorization: `Bearer ${owner.tokens.accessToken}`,
+      },
+    })
+    expect(revokeAcceptedResponse.statusCode).toBe(400)
+    const revokeAcceptedPayload = revokeAcceptedResponse.json<RespuestaError>()
+    expect(revokeAcceptedPayload.error.codigo).toBe('INVITACION_NO_REVOCABLE')
+
+    const revokeNotFoundResponse = await app.inject({
+      method: 'POST',
+      url: `/api/v1/workspaces/${workspaceId}/invites/invite-no-existe/revoke`,
+      headers: {
+        authorization: `Bearer ${owner.tokens.accessToken}`,
+      },
+    })
+    expect(revokeNotFoundResponse.statusCode).toBe(404)
+    const revokeNotFoundPayload = revokeNotFoundResponse.json<RespuestaError>()
+    expect(revokeNotFoundPayload.error.codigo).toBe('INVITACION_NO_ENCONTRADA')
+  })
+
+  it('obtiene workspace actual y valida errores de acceso/selección', async () => {
+    const owner = await register({
+      email: uniqueEmail('owner-current'),
+      password: 'SecurePass123!',
+      displayName: 'Owner Current',
+      workspaceName: 'Workspace Current',
+    })
+    const outsider = await register({
+      email: uniqueEmail('outsider-current'),
+      password: 'SecurePass123!',
+      displayName: 'Outsider Current',
+      workspaceName: 'Workspace Outsider',
+    })
+
+    const workspaceId = owner.workspaces[0]?.id
+    expect(workspaceId).toBeDefined()
+
+    const successResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/workspaces/current',
+      headers: {
+        authorization: `Bearer ${owner.tokens.accessToken}`,
+        'x-workspace-id': workspaceId ?? '',
+      },
+    })
+
+    expect(successResponse.statusCode).toBe(200)
+    const successPayload = successResponse.json<
+      RespuestaExitosa<{
+        id: string
+        name: string
+        role: 'OWNER' | 'MEMBER'
+        baseCurrency: string
+        timezone: string
+        membersCount: number
+      }>
+    >()
+    expect(successPayload.exito).toBe(true)
+    expect(successPayload.datos.id).toBe(workspaceId)
+    expect(successPayload.datos.role).toBe('OWNER')
+    expect(successPayload.datos.membersCount).toBeGreaterThan(0)
+
+    const missingHeaderResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/workspaces/current',
+      headers: {
+        authorization: `Bearer ${owner.tokens.accessToken}`,
+      },
+    })
+
+    expect(missingHeaderResponse.statusCode).toBe(400)
+    const missingHeaderPayload = missingHeaderResponse.json<RespuestaError>()
+    expect(missingHeaderPayload.exito).toBe(false)
+    expect(missingHeaderPayload.error.codigo).toBe('WORKSPACE_NO_SELECCIONADO')
+
+    const forbiddenResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/workspaces/current',
+      headers: {
+        authorization: `Bearer ${outsider.tokens.accessToken}`,
+        'x-workspace-id': workspaceId ?? '',
+      },
+    })
+
+    expect(forbiddenResponse.statusCode).toBe(403)
+    const forbiddenPayload = forbiddenResponse.json<RespuestaError>()
+    expect(forbiddenPayload.exito).toBe(false)
+    expect(forbiddenPayload.error.codigo).toBe('WORKSPACE_SIN_ACCESO')
   })
 
   it('ejecuta flujo financiero: cuentas, movimientos, transferencias, metas y reportes', async () => {
@@ -429,6 +676,115 @@ describeDb('HTTP v1 con MySQL real', () => {
     >()
     expect(cashflowPayload.exito).toBe(true)
     expect(cashflowPayload.datos.serie.length).toBeGreaterThan(0)
+  })
+
+  it('valida conflictos de unicidad para categorías con error funcional 409', async () => {
+    const owner = await register({
+      email: uniqueEmail('finance-categories'),
+      password: 'SecurePass123!',
+      displayName: 'Finance Categories Owner',
+      workspaceName: 'Workspace Categorias',
+    })
+
+    const workspaceId = owner.workspaces[0]?.id
+    expect(workspaceId).toBeDefined()
+
+    const headers = {
+      authorization: `Bearer ${owner.tokens.accessToken}`,
+      'x-workspace-id': workspaceId ?? '',
+    }
+
+    const categoryName = `Categoria unica ${randomSuffix()}`
+
+    const firstCategoryResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/categories',
+      headers,
+      payload: {
+        name: categoryName,
+        type: 'EXPENSE',
+      },
+    })
+
+    expect(firstCategoryResponse.statusCode).toBe(201)
+    const firstCategoryId = firstCategoryResponse.json<RespuestaExitosa<{ id: string }>>().datos.id
+    expect(firstCategoryId).toBeDefined()
+
+    const duplicateCategoryResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/categories',
+      headers,
+      payload: {
+        name: categoryName,
+        type: 'EXPENSE',
+      },
+    })
+
+    expect(duplicateCategoryResponse.statusCode).toBe(409)
+    const duplicatePayload = duplicateCategoryResponse.json<RespuestaError>()
+    expect(duplicatePayload.error.codigo).toBe('CATEGORIA_DUPLICADA')
+
+    const secondCategoryResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/categories',
+      headers,
+      payload: {
+        name: `${categoryName} alternativa`,
+        type: 'EXPENSE',
+      },
+    })
+    expect(secondCategoryResponse.statusCode).toBe(201)
+    const secondCategoryId = secondCategoryResponse
+      .json<RespuestaExitosa<{ id: string }>>()
+      .datos.id
+
+    const updateToDuplicateResponse = await app.inject({
+      method: 'PATCH',
+      url: `/api/v1/categories/${secondCategoryId}`,
+      headers,
+      payload: {
+        name: categoryName,
+      },
+    })
+
+    expect(updateToDuplicateResponse.statusCode).toBe(409)
+    const updateDuplicatePayload = updateToDuplicateResponse.json<RespuestaError>()
+    expect(updateDuplicatePayload.error.codigo).toBe('CATEGORIA_DUPLICADA')
+  })
+
+  it('retorna 400 para filtros de periodo inválidos y evita 500 por error de cliente', async () => {
+    const owner = await register({
+      email: uniqueEmail('period-invalid'),
+      password: 'SecurePass123!',
+      displayName: 'Period Invalid Owner',
+      workspaceName: 'Workspace Periodos',
+    })
+
+    const workspaceId = owner.workspaces[0]?.id
+    expect(workspaceId).toBeDefined()
+
+    const headers = {
+      authorization: `Bearer ${owner.tokens.accessToken}`,
+      'x-workspace-id': workspaceId ?? '',
+    }
+
+    const missingRangeResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/transactions?period=custom',
+      headers,
+    })
+    expect(missingRangeResponse.statusCode).toBe(400)
+    const missingRangePayload = missingRangeResponse.json<RespuestaError>()
+    expect(missingRangePayload.error.codigo).toBe('PERIODO_INVALIDO')
+
+    const invalidRangeResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/reports/cashflow?period=custom&from=2026-05-30T23:59:59.000Z&to=2026-04-30T23:59:59.000Z',
+      headers,
+    })
+    expect(invalidRangeResponse.statusCode).toBe(400)
+    const invalidRangePayload = invalidRangeResponse.json<RespuestaError>()
+    expect(invalidRangePayload.error.codigo).toBe('PERIODO_INVALIDO')
   })
 
   it('gestiona CRUD de presupuestos con permisos, validaciones y unicidad', async () => {
@@ -725,5 +1081,203 @@ describeDb('HTTP v1 con MySQL real', () => {
     }
     expect(exceededMeta.alertasPresupuesto?.[0]?.alertLevel).toBe('EXCEEDED')
     expect((exceededMeta.alertasPresupuesto?.[0]?.usedPercent ?? 0) >= 100).toBe(true)
+  })
+
+  it('expone estado de módulos fase 5 y persiste tickets/compras/inventario con datos reales', async () => {
+    const owner = await register({
+      email: uniqueEmail('phase5-owner'),
+      password: 'SecurePass123!',
+      displayName: 'Phase5 Owner',
+      workspaceName: 'Workspace Phase5',
+    })
+
+    const workspaceId = owner.workspaces[0]?.id
+    expect(workspaceId).toBeDefined()
+
+    const headers = {
+      authorization: `Bearer ${owner.tokens.accessToken}`,
+      'x-workspace-id': workspaceId ?? '',
+    }
+
+    const initialStatusResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/phase5/status',
+      headers,
+    })
+
+    expect(initialStatusResponse.statusCode).toBe(200)
+    const initialStatusPayload = initialStatusResponse.json<
+      RespuestaExitosa<{
+        modules: Array<{
+          key: string
+          status: string
+          count: number
+        }>
+      }>
+    >()
+    expect(initialStatusPayload.exito).toBe(true)
+    expect(initialStatusPayload.datos.modules.length).toBe(3)
+    expect(initialStatusPayload.datos.modules.every((module) => module.status === 'READY')).toBe(
+      true,
+    )
+
+    const accountResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/accounts',
+      headers,
+      payload: {
+        name: 'Caja Phase5',
+        type: 'CASH',
+      },
+    })
+    expect(accountResponse.statusCode).toBe(201)
+    const accountId = accountResponse.json<RespuestaExitosa<{ id: string }>>().datos.id
+    expect(accountId).toBeDefined()
+
+    const nowIso = new Date().toISOString()
+    const transactionResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/transactions',
+      headers,
+      payload: {
+        accountId,
+        type: 'EXPENSE',
+        amount: 18_500,
+        occurredAt: nowIso,
+        description: 'Compra para vínculo fase 5',
+      },
+    })
+    expect(transactionResponse.statusCode).toBe(201)
+    const linkedTransactionId = transactionResponse.json<RespuestaExitosa<{ id: string }>>().datos.id
+
+    const createTicketResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tickets',
+      headers,
+      payload: {
+        title: 'Ticket supermercado',
+        amount: 18_500,
+        purchasedAt: nowIso,
+        merchant: 'Mercado Central',
+        category: 'Despensa',
+        currency: 'MXN',
+        linkedTransactionId,
+      },
+    })
+
+    expect(createTicketResponse.statusCode).toBe(201)
+    const createTicketPayload = createTicketResponse.json<
+      RespuestaExitosa<{ id: string; title: string; linkedTransactionId: string | null }>
+    >()
+    expect(createTicketPayload.exito).toBe(true)
+    expect(createTicketPayload.datos.title).toBe('Ticket supermercado')
+    expect(createTicketPayload.datos.linkedTransactionId).toBe(linkedTransactionId)
+
+    const listTicketsResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tickets?period=month&search=Mercado',
+      headers,
+    })
+    expect(listTicketsResponse.statusCode).toBe(200)
+    const listTicketsPayload = listTicketsResponse.json<
+      RespuestaExitosa<Array<{ id: string; title: string }>>
+    >()
+    expect(listTicketsPayload.exito).toBe(true)
+    expect(
+      listTicketsPayload.datos.some((ticket) => ticket.id === createTicketPayload.datos.id),
+    ).toBe(true)
+
+    const createShoppingItemResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/shopping-items',
+      headers,
+      payload: {
+        name: 'Leche',
+        quantity: 2,
+        unit: 'pzas',
+        estimatedAmount: 120,
+        priority: 'HIGH',
+        status: 'PENDING',
+        linkedTransactionId,
+      },
+    })
+    expect(createShoppingItemResponse.statusCode).toBe(201)
+    const createShoppingPayload = createShoppingItemResponse.json<
+      RespuestaExitosa<{ id: string; status: 'PENDING' | 'BOUGHT' | 'CANCELED' }>
+    >()
+    expect(createShoppingPayload.exito).toBe(true)
+    expect(createShoppingPayload.datos.status).toBe('PENDING')
+
+    const listShoppingItemsResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/shopping-items?status=PENDING&search=Leche',
+      headers,
+    })
+    expect(listShoppingItemsResponse.statusCode).toBe(200)
+    const listShoppingPayload = listShoppingItemsResponse.json<
+      RespuestaExitosa<Array<{ id: string; name: string }>>
+    >()
+    expect(listShoppingPayload.exito).toBe(true)
+    expect(
+      listShoppingPayload.datos.some((item) => item.id === createShoppingPayload.datos.id),
+    ).toBe(true)
+
+    const createInventoryItemResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/inventory-items',
+      headers,
+      payload: {
+        name: 'Arroz',
+        stock: 3,
+        minStock: 5,
+        unit: 'kg',
+        reorderQty: 4,
+      },
+    })
+    expect(createInventoryItemResponse.statusCode).toBe(201)
+    const createInventoryPayload = createInventoryItemResponse.json<
+      RespuestaExitosa<{ id: string; name: string }>
+    >()
+    expect(createInventoryPayload.exito).toBe(true)
+
+    const listInventoryItemsResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/inventory-items?lowStockOnly=true&search=Arroz',
+      headers,
+    })
+    expect(listInventoryItemsResponse.statusCode).toBe(200)
+    const listInventoryPayload = listInventoryItemsResponse.json<
+      RespuestaExitosa<Array<{ id: string; isLowStock: boolean }>>
+    >()
+    expect(listInventoryPayload.exito).toBe(true)
+    expect(
+      listInventoryPayload.datos.some(
+        (item) => item.id === createInventoryPayload.datos.id && item.isLowStock,
+      ),
+    ).toBe(true)
+
+    const statusResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/phase5/status',
+      headers,
+    })
+    expect(statusResponse.statusCode).toBe(200)
+    const statusPayload = statusResponse.json<
+      RespuestaExitosa<{
+        modules: Array<{ key: string; status: string; count: number }>
+      }>
+    >()
+    expect(statusPayload.exito).toBe(true)
+
+    const ticketsModule = statusPayload.datos.modules.find((module) => module.key === 'tickets')
+    const shoppingModule = statusPayload.datos.modules.find((module) => module.key === 'shopping')
+    const inventoryModule = statusPayload.datos.modules.find((module) => module.key === 'inventory')
+
+    expect(ticketsModule?.status).toBe('READY')
+    expect(shoppingModule?.status).toBe('READY')
+    expect(inventoryModule?.status).toBe('READY')
+    expect((ticketsModule?.count ?? 0) >= 1).toBe(true)
+    expect((shoppingModule?.count ?? 0) >= 1).toBe(true)
+    expect((inventoryModule?.count ?? 0) >= 1).toBe(true)
   })
 })

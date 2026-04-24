@@ -1,4 +1,5 @@
 import { dayjs } from './dayjs.js'
+import { HttpError } from '../../../interfaces/http/errors/http-error.js'
 
 export type Period = 'day' | 'week' | 'month' | 'year' | 'custom'
 
@@ -16,10 +17,15 @@ interface PeriodRange {
 }
 
 const toUtcDate = (value: string, timezone: string): Date => {
-  const parsed = dayjs.tz(value, timezone)
+  let parsed
+  try {
+    parsed = dayjs.tz(value, timezone)
+  } catch {
+    throw new HttpError(400, 'PERIODO_INVALIDO', `Fecha inválida: ${value}`)
+  }
 
   if (!parsed.isValid()) {
-    throw new Error(`Fecha inválida: ${value}`)
+    throw new HttpError(400, 'PERIODO_INVALIDO', `Fecha inválida: ${value}`)
   }
 
   return parsed.utc().toDate()
@@ -27,24 +33,29 @@ const toUtcDate = (value: string, timezone: string): Date => {
 
 export const resolvePeriodRange = (args: ResolvePeriodRangeArgs): PeriodRange => {
   const period = args.period ?? 'month'
-  const anchor = args.anchorDate
-    ? dayjs.tz(args.anchorDate, args.timezone)
-    : dayjs().tz(args.timezone)
+  let anchor
+  try {
+    anchor = args.anchorDate
+      ? dayjs.tz(args.anchorDate, args.timezone)
+      : dayjs().tz(args.timezone)
+  } catch {
+    throw new HttpError(400, 'PERIODO_INVALIDO', 'anchorDate inválida')
+  }
 
   if (!anchor.isValid()) {
-    throw new Error('anchorDate inválida')
+    throw new HttpError(400, 'PERIODO_INVALIDO', 'anchorDate inválida')
   }
 
   if (period === 'custom') {
     if (!args.from || !args.to) {
-      throw new Error('Para periodo custom se requieren from y to')
+      throw new HttpError(400, 'PERIODO_INVALIDO', 'Para periodo custom se requieren from y to')
     }
 
     const fromUtc = toUtcDate(args.from, args.timezone)
     const toUtc = toUtcDate(args.to, args.timezone)
 
     if (fromUtc > toUtc) {
-      throw new Error('El rango de fechas es inválido')
+      throw new HttpError(400, 'PERIODO_INVALIDO', 'El rango de fechas es inválido')
     }
 
     return { fromUtc, toUtc }

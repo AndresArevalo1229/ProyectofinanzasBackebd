@@ -492,6 +492,10 @@ export class AuthService {
         request,
       })
 
+      if (!this.config.auth.exposePasswordResetToken) {
+        return {}
+      }
+
       return {
         resetToken: rawResetToken,
       }

@@ -11,6 +11,7 @@ Backend en Node.js 22 + TypeScript + Fastify + Prisma (MySQL) con estructura Cle
 
 1. Crear `.env` desde `.env.example`.
 2. Ajustar credenciales `MYSQL_*`, secretos JWT y puertos.
+3. Configurar `AUTH_EXPOSE_PASSWORD_RESET_TOKEN=false` en producción.
 
 ## Comandos
 
@@ -21,9 +22,19 @@ Backend en Node.js 22 + TypeScript + Fastify + Prisma (MySQL) con estructura Cle
 - `npm run test`: suite de pruebas.
 - `npm run test:db`: integración real contra MySQL.
 - `npm run seed:default`: crea usuario admin + workspace inicial por defecto (idempotente).
+- `npm run seed:reset-admin`: reset seguro del admin seed (requiere confirmación explícita).
+- `npm run cleanup:production-data`: respaldo + limpieza controlada de datos de prueba (por defecto en `dry-run`).
 - `npm run prisma:generate`: genera cliente Prisma.
 - `npm run prisma:migrate:dev -- --name <nombre>`: crea/aplica migración local.
 - `npm run prisma:migrate:deploy`: aplica migraciones pendientes.
+
+### Seed admin: modo normal vs reset
+
+- Modo normal (`seed:default`): si el admin ya existe, no toca datos.
+- Modo reset (`seed:reset-admin`): borra y recrea el admin solo si es seguro.
+  - Requiere confirmación explícita (`YES_RESET_ADMIN`).
+  - Aborta si detecta otros miembros activos en workspaces del admin.
+  - Aborta si detecta membresías cruzadas/no-owner del admin.
 
 ## Endpoints clave v1
 
@@ -39,6 +50,7 @@ Backend en Node.js 22 + TypeScript + Fastify + Prisma (MySQL) con estructura Cle
 - Workspaces:
   - `POST /api/v1/workspaces`
   - `GET /api/v1/workspaces`
+  - `GET /api/v1/workspaces/current`
   - `POST /api/v1/workspaces/:workspaceId/invites`
   - `POST /api/v1/workspaces/join`
   - `GET /api/v1/workspaces/:workspaceId/members`
@@ -58,6 +70,14 @@ Backend en Node.js 22 + TypeScript + Fastify + Prisma (MySQL) con estructura Cle
   - `GET /api/v1/dashboard/summary`
   - `GET /api/v1/reports/by-category`
   - `GET /api/v1/reports/cashflow`
+- Expansión (fase 5):
+  - `GET /api/v1/phase5/status`
+  - `GET /api/v1/tickets`
+  - `POST /api/v1/tickets`
+  - `GET /api/v1/shopping-items`
+  - `POST /api/v1/shopping-items`
+  - `GET /api/v1/inventory-items`
+  - `POST /api/v1/inventory-items`
 
 ## Contrato HTTP estándar
 
@@ -78,3 +98,7 @@ Backend en Node.js 22 + TypeScript + Fastify + Prisma (MySQL) con estructura Cle
 
 - Se activan con: `RUN_DB_INTEGRATION=1 npm run test`
 - CI ya las ejecuta con servicio MySQL en GitHub Actions.
+
+## Go-Live
+
+- Checklist de despliegue y limpieza: `docs/go-live-checklist.md`.

@@ -13,6 +13,7 @@ interface WorkspacesRoutesDependencies {
   workspaceService: WorkspaceService
   prisma: PrismaClient
   requireAuth: (request: FastifyRequest) => Promise<void>
+  requireWorkspace: (request: FastifyRequest) => Promise<void>
 }
 
 const createWorkspaceSchema = z.object({
@@ -78,6 +79,34 @@ export const registerWorkspacesRoutes = (
         crearRespuestaExitosa({
           mensaje: 'Workspaces obtenidos',
           datos: workspaces,
+          requestId: request.id,
+        }),
+      )
+    },
+  )
+
+  app.get(
+    '/workspaces/current',
+    {
+      schema: {
+        tags: ['Workspaces'],
+        summary: 'Obtener workspace actual por header',
+      },
+      preHandler: [dependencies.requireAuth, dependencies.requireWorkspace],
+    },
+    async (request, reply) => {
+      const authUser = getAuthUser(request)
+      const workspace = getWorkspaceContext(request)
+
+      const current = await dependencies.workspaceService.getCurrentWorkspace(
+        authUser.id,
+        workspace.workspaceId,
+      )
+
+      return reply.send(
+        crearRespuestaExitosa({
+          mensaje: 'Workspace actual obtenido',
+          datos: current,
           requestId: request.id,
         }),
       )
@@ -150,6 +179,93 @@ export const registerWorkspacesRoutes = (
         crearRespuestaExitosa({
           mensaje: 'Invitación creada',
           datos: invite,
+          requestId: request.id,
+        }),
+      )
+    },
+  )
+
+  app.get(
+    '/workspaces/:workspaceId/invites',
+    {
+      schema: {
+        tags: ['Workspaces'],
+        summary: 'Listar historial de invitaciones del workspace',
+      },
+      preHandler: [
+        dependencies.requireAuth,
+        async (request) => {
+          const authUser = getAuthUser(request)
+          const workspaceId = (request.params as { workspaceId?: string }).workspaceId
+
+          if (!workspaceId) {
+            throw new HttpError(400, 'WORKSPACE_INVALIDO', 'workspaceId es requerido')
+          }
+
+          request.workspaceContext = await assertWorkspaceAccess(dependencies.prisma, {
+            workspaceId,
+            userId: authUser.id,
+            ownerOnly: true,
+          })
+        },
+      ],
+    },
+    async (request, reply) => {
+      const workspace = getWorkspaceContext(request)
+      const invites = await dependencies.workspaceService.listInvites(workspace.workspaceId)
+
+      return reply.send(
+        crearRespuestaExitosa({
+          mensaje: 'Invitaciones obtenidas',
+          datos: invites,
+          requestId: request.id,
+        }),
+      )
+    },
+  )
+
+  app.post(
+    '/workspaces/:workspaceId/invites/:inviteId/revoke',
+    {
+      schema: {
+        tags: ['Workspaces'],
+        summary: 'Revocar invitación del workspace',
+      },
+      preHandler: [
+        dependencies.requireAuth,
+        async (request) => {
+          const authUser = getAuthUser(request)
+          const workspaceId = (request.params as { workspaceId?: string }).workspaceId
+
+          if (!workspaceId) {
+            throw new HttpError(400, 'WORKSPACE_INVALIDO', 'workspaceId es requerido')
+          }
+
+          request.workspaceContext = await assertWorkspaceAccess(dependencies.prisma, {
+            workspaceId,
+            userId: authUser.id,
+            ownerOnly: true,
+          })
+        },
+      ],
+    },
+    async (request, reply) => {
+      const workspace = getWorkspaceContext(request)
+      const params = request.params as { inviteId?: string }
+
+      if (!params.inviteId) {
+        throw new HttpError(400, 'INVITACION_INVALIDA', 'inviteId es requerido')
+      }
+
+      const revoked = await dependencies.workspaceService.revokeInvite(
+        workspace.workspaceId,
+        params.inviteId,
+      )
+
+      return reply.send(
+        crearRespuestaExitosa({
+          mensaje: 'Invitación revocada',
+          datos: revoked,
           requestId: request.id,
         }),
       )
